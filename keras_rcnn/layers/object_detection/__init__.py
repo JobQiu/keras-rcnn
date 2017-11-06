@@ -1,3 +1,7 @@
-from ._anchor import Anchor
+# -*- coding: utf-8 -*-
+
+from ._anchor_target import AnchorTarget
+
 from ._object_proposal import ObjectProposal
-from ._region_proposal_network import RegionProposalNetwork
+
+from ._proposal_target import ProposalTarget

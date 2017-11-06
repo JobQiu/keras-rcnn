@@ -3,8 +3,21 @@ import setuptools
 setuptools.setup(
     author="Allen Goodman",
     author_email="allen.goodman@icloud.com",
+    extras_require={
+        "test": [
+            "codecov",
+            "mock",
+            "pytest",
+            "pytest-cov",
+            "pytest-pep8",
+            "pytest-runner"
+        ],
+    },
     install_requires=[
-        "keras"
+        "jsonschema",
+        "keras",
+        "keras-resnet",
+        "scikit-image"
     ],
     license="MIT",
     name="keras-rcnn",
@@ -21,5 +34,5 @@ setuptools.setup(
         ]
     ),
     url="https://github.com/broadinstitute/keras-rcnn",
-    version="0.0.1"
+    version="0.0.2"
 )

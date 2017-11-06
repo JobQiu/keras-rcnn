@@ -1,148 +1,190 @@
-import itertools
+# -*- coding: utf-8 -*-
 
 import keras.backend
-import numpy
 import tensorflow
 
-import keras_rcnn.backend
+
+def resize(image, output_shape):
+    """
+    Resize an image or images to match a certain size.
+
+    :param image: Input image or images with the shape:
+
+        (rows, columns, channels)
+
+    or:
+
+        (batch, rows, columns, channels).
+
+    :param output_shape: Shape of the output image:
+
+        (rows, columns).
+
+    :return: If an image is provided a resized image with the shape:
+
+        (resized rows, resized columns, channels)
+
+    is returned.
+
+    If more than one image is provided then resized images with the shape:
+
+        (batch size, resized rows, resized columns, channels)
+
+    are returned.
+    """
+    return tensorflow.image.resize_images(image, output_shape)
 
 
-def bbox_transform_inv(shifted, boxes):
-    if boxes.shape[0] == 0:
-        return tensorflow.zeros((0, boxes.shape[1]), dtype=boxes.dtype)
-
-    a = shifted[:, 2] - shifted[:, 0] + 1.0
-    b = shifted[:, 3] - shifted[:, 1] + 1.0
-
-    ctr_x = shifted[:, 0] + 0.5 * a
-    ctr_y = shifted[:, 1] + 0.5 * b
-
-    dx = boxes[:, 0::4]
-    dy = boxes[:, 1::4]
-    dw = boxes[:, 2::4]
-    dh = boxes[:, 3::4]
-
-    pred_ctr_x = dx * a[:, tensorflow.newaxis] + ctr_x[:, tensorflow.newaxis]
-    pred_ctr_y = dy * b[:, tensorflow.newaxis] + ctr_y[:, tensorflow.newaxis]
-
-    pred_w = tensorflow.exp(dw) * a[:, tensorflow.newaxis]
-    pred_h = tensorflow.exp(dh) * b[:, tensorflow.newaxis]
-
-    pred_boxes = [
-        pred_ctr_x - 0.5 * pred_w,
-        pred_ctr_y - 0.5 * pred_h,
-        pred_ctr_x + 0.5 * pred_w,
-        pred_ctr_y + 0.5 * pred_h
-    ]
-
-    return keras.backend.concatenate(pred_boxes)
+def transpose(x, axes=None):
+    """
+    Permute the dimensions of an array.
+    """
+    return tensorflow.transpose(x, axes)
 
 
-def filter_boxes(proposals, minimum):
-    ws = proposals[:, 2] - proposals[:, 0] + 1
-    hs = proposals[:, 3] - proposals[:, 1] + 1
+def shuffle(x):
+    """
+    Modify a sequence by shuffling its contents. This function only shuffles
+    the array along the first axis of a multi-dimensional array. The order of
+    sub-arrays is changed but their contents remains the same.
+    """
+    return tensorflow.random_shuffle(x)
 
-    indicies = tensorflow.where((ws >= minimum) & (hs >= minimum))
 
-    indicies = keras.backend.flatten(indicies)
+def gather_nd(params, indices):
+    return tensorflow.gather_nd(params, indices)
 
-    return keras.backend.cast(indicies, tensorflow.int32)
+
+def matmul(a, b, transpose_a=False, transpose_b=False, adjoint_a=False, adjoint_b=False, a_is_sparse=False, b_is_sparse=False):
+    return tensorflow.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b, adjoint_a=adjoint_a, adjoint_b=adjoint_b, a_is_sparse=a_is_sparse, b_is_sparse=b_is_sparse)
+
+
+# TODO: emulate NumPy semantics
+def argsort(a):
+    _, indices = tensorflow.nn.top_k(a, keras.backend.shape(a)[-1])
+
+    return indices
+
+
+def scatter_add_tensor(ref, indices, updates, name=None):
+    """
+    Adds sparse updates to a variable reference.
+
+    This operation outputs ref after the update is done. This makes it
+    easier to chain operations that need to use the reset value.
+
+    Duplicate indices: if multiple indices reference the same location,
+    their contributions add.
+
+    Requires updates.shape = indices.shape + ref.shape[1:].
+
+    :param ref: A Tensor. Must be one of the following types: float32,
+    float64, int64, int32, uint8, uint16, int16, int8, complex64, complex128,
+    qint8, quint8, qint32, half.
+
+    :param indices: A Tensor. Must be one of the following types: int32,
+    int64. A tensor of indices into the first dimension of ref.
+
+    :param updates: A Tensor. Must have the same dtype as ref. A tensor of
+    updated values to add to ref
+
+    :param name: A name for the operation (optional).
+
+    :return: Same as ref. Returned as a convenience for operations that want
+    to use the updated values after the update is done.
+    """
+    with tensorflow.name_scope(name, 'scatter_add_tensor', [ref, indices, updates]) as scope:
+        ref = tensorflow.convert_to_tensor(ref, name='ref')
+
+        indices = tensorflow.convert_to_tensor(indices, name='indices')
+
+        updates = tensorflow.convert_to_tensor(updates, name='updates')
+
+        ref_shape = tensorflow.shape(ref, out_type=indices.dtype, name='ref_shape')
+
+        scattered_updates = tensorflow.scatter_nd(indices, updates, ref_shape, name='scattered_updates')
+
+        with tensorflow.control_dependencies([tensorflow.assert_equal(ref_shape, tensorflow.shape(scattered_updates, out_type=indices.dtype))]):
+            output = tensorflow.add(ref, scattered_updates, name=scope)
+
+        return output
+
+
+def meshgrid(*args, **kwargs):
+    return tensorflow.meshgrid(*args, **kwargs)
+
+
+newaxis = tensorflow.newaxis
+
+
+def where(condition, x=None, y=None):
+    return tensorflow.where(condition, x, y)
 
 
 def non_maximum_suppression(boxes, scores, maximum, threshold=0.5):
-    return tensorflow.image.non_max_suppression(
-        boxes=boxes,
-        iou_threshold=threshold,
-        max_output_size=maximum,
-        scores=scores
-    )
+    return tensorflow.image.non_max_suppression(boxes=boxes, iou_threshold=threshold, max_output_size=maximum, scores=scores)
 
 
-def propose(boxes, scores, maximum):
-    shape = keras.backend.int_shape(boxes)[1:3]
-
-    shifted = keras_rcnn.backend.shift(shape, 16)
-
-    proposals = keras.backend.reshape(boxes, (-1, 4))
-
-    proposals = keras_rcnn.backend.bbox_transform_inv(shifted, proposals)
-
-    proposals = keras_rcnn.backend.clip(proposals, shape)
-
-    indicies = keras_rcnn.backend.filter_boxes(proposals, 1)
-
-    proposals = keras.backend.gather(proposals, indicies)
-
-    scores = scores[:, :, :, :9]
-    scores = keras.backend.reshape(scores, (-1, 1))
-    scores = keras.backend.gather(scores, indicies)
-    scores = keras.backend.flatten(scores)
-
-    proposals = keras.backend.cast(proposals, tensorflow.float32)
-    scores = keras.backend.cast(scores, tensorflow.float32)
-
-    indicies = keras_rcnn.backend.non_maximum_suppression(proposals, scores, maximum, 0.7)
-
-    proposals = keras.backend.gather(proposals, indicies)
-
-    return keras.backend.expand_dims(proposals, 0)
-
-
-def resize_images(images, shape):
-    return tensorflow.image.resize_images(images, shape)
-
-
-def overlap(x, y):
-    n = x.shape[0]
-
-    k = y.shape[0]
-
-    overlaps = keras.backend.zeros((n, k), dtype=numpy.float32)
-
-    for k_index in range(k):
-        area = ((y[k_index, 2] - y[k_index, 0] + 1) * (y[k_index, 3] - y[k_index, 1] + 1))
-
-        for n_index in range(n):
-            iw = (min(x[n_index, 2], y[k_index, 2]) - max(x[n_index, 0], y[k_index, 0]) + 1)
-
-            if iw > 0:
-                ih = (min(x[n_index, 3], y[k_index, 3]) - max(x[n_index, 1], y[k_index, 1]) + 1)
-
-                if ih > 0:
-                    ua = float((x[n_index, 2] - x[n_index, 0] + 1) * (x[n_index, 3] - x[n_index, 1] + 1) + area - iw * ih)
-
-                    overlaps[n, k] = iw * ih / ua
-
-    return overlaps
-
-
-def bbox_overlaps(boxes, query_boxes):
+def crop_and_resize(image, boxes, size):
+    """Crop the image given boxes and resize with bilinear interplotation.
+    # Parameters
+    image: Input image of shape (1, image_height, image_width, depth)
+    boxes: Regions of interest of shape (num_boxes, 4),
+    each row [y1, x1, y2, x2]
+    size: Fixed size [h, w], e.g. [7, 7], for the output slices.
+    # Returns
+    4D Tensor (number of regions, slice_height, slice_width, channels)
     """
-    Parameters
-    ----------
-    boxes: (N, 4) ndarray of float
-    query_boxes: (K, 4) ndarray of float
-    Returns
-    -------
-    overlaps: (N, K) ndarray of overlap between boxes and query_boxes
+
+    box_ind = keras.backend.zeros_like(boxes, "int32")
+    box_ind = box_ind[:, 0]
+    box_ind = keras.backend.reshape(box_ind, [-1])
+
+    boxes = keras.backend.reshape(boxes, [-1, 4])
+
+    return tensorflow.image.crop_and_resize(image, boxes, box_ind, size)
+
+
+def smooth_l1(output, target, anchored=False, weights=None):
+    difference = keras.backend.abs(output - target)
+
+    p = difference < 1
+    q = 0.5 * keras.backend.square(difference)
+    r = difference - 0.5
+
+    difference = tensorflow.where(p, q, r)
+
+    loss = keras.backend.sum(difference, axis=2)
+
+    if weights is not None:
+        loss *= weights
+
+    if anchored:
+        return loss
+
+    return keras.backend.sum(loss)
+
+
+def squeeze(a, axis=None):
     """
-    N = boxes.shape[0]
-    K = query_boxes.shape[0]
+    Remove single-dimensional entries from the shape of an array.
+    """
+    return tensorflow.squeeze(a, axis)
 
-    overlaps = numpy.zeros((N, K), dtype=numpy.float)
 
-    for k in range(K):
-        box_area = ((query_boxes[k, 2] - query_boxes[k, 0] + 1) * (query_boxes[k, 3] - query_boxes[k, 1] + 1))
+def unique(x, return_index=False):
+    """
+    Find the unique elements of an array.
 
-        for n in range(N):
-            iw = (min(boxes[n, 2], query_boxes[k, 2]) - max(boxes[n, 0], query_boxes[k, 0]) + 1)
+    Returns the sorted unique elements of an array. There are three optional
+    outputs in addition to the unique elements: the indices of the input array
+    that give the unique values, the indices of the unique array that
+    reconstruct the input array, and the number of times each unique value
+    comes up in the input array.
+    """
+    y, indices = tensorflow.unique(x)
 
-            if iw > 0:
-                ih = (min(boxes[n, 3], query_boxes[k, 3]) - max(boxes[n, 1], query_boxes[k, 1]) + 1)
-
-                if ih > 0:
-                    ua = float((boxes[n, 2] - boxes[n, 0] + 1) * (boxes[n, 3] - boxes[n, 1] + 1) + box_area - iw * ih)
-
-                    overlaps[n, k] = iw * ih / ua
-
-    return overlaps
+    if return_index:
+        return y, indices
+    else:
+        return y
